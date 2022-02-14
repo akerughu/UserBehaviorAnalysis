@@ -6,6 +6,8 @@ import org.apache.commons.compress.utils.Lists;
 import org.apache.flink.api.common.functions.AggregateFunction;
 import org.apache.flink.api.common.state.ListState;
 import org.apache.flink.api.common.state.ListStateDescriptor;
+import org.apache.flink.api.common.state.MapState;
+import org.apache.flink.api.common.state.MapStateDescriptor;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.TimeCharacteristic;
 import org.apache.flink.streaming.api.datastream.DataStream;
@@ -19,11 +21,10 @@ import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.OutputTag;
 
-import javax.xml.crypto.Data;
-import java.net.URL;
 import java.sql.Timestamp;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Map;
 import java.util.regex.Pattern;
 
 public class HotPages {
@@ -119,29 +120,51 @@ public class HotPages {
             this.topSize = topSize;
         }
 
-        // 定义状态，保存当前所有PageViewCount到list中
-        ListState<PageViewCount> pageViewCountListState;
+        // 定义状态，保存当前所有PageViewCount到map中
+//        ListState<PageViewCount> pageViewCountListState;
+        MapState<String, Long> pageViewCountMapState;
 
         @Override
         public void open(Configuration parameters) throws Exception {
-            pageViewCountListState = getRuntimeContext().getListState(
-                    new ListStateDescriptor<PageViewCount>("page-count-list", PageViewCount.class)
+//            pageViewCountListState = getRuntimeContext().getListState(
+//                    new ListStateDescriptor<PageViewCount>("page-count-list", PageViewCount.class)
+//            );
+            pageViewCountMapState = getRuntimeContext().getMapState(
+                    new MapStateDescriptor<String, Long>("page-count-map", String.class, Long.class)
             );
         }
 
         @Override
         public void processElement(PageViewCount pageViewCount, Context context, Collector<String> collector) throws Exception {
-            pageViewCountListState.add(pageViewCount);
+//            pageViewCountListState.add(pageViewCount);
+            pageViewCountMapState.put(pageViewCount.getUrl(), pageViewCount.getCount());
             context.timerService().registerEventTimeTimer(pageViewCount.getWindowEnd() + 1);
+
+            // 注册一个1分钟之后的定时器用来清空状态
+            context.timerService().registerEventTimeTimer(pageViewCount.getWindowEnd() + 60 * 1000L);
         }
 
         @Override
         public void onTimer(long timestamp, OnTimerContext ctx, Collector<String> out) throws Exception {
-            ArrayList<PageViewCount> pageViewCounts = Lists.newArrayList(pageViewCountListState.get().iterator());
+            // 先判断是否到了窗口关闭清理时间，如果是，直接清空状态返回
+            if (timestamp == ctx.getCurrentKey() + 60 * 1000L) {
+                pageViewCountMapState.clear();
+                return;
+            }
+
+//            ArrayList<PageViewCount> pageViewCounts = Lists.newArrayList(pageViewCountListState.get().iterator());
+            ArrayList<Map.Entry<String, Long>> pageViewCounts = Lists.newArrayList(pageViewCountMapState.entries().iterator());
             pageViewCounts.sort((o1, o2) -> {
-                if (o1.getCount() > o2.getCount()) {
+//                if (o1.getCount() > o2.getCount()) {
+//                    return -1;
+//                } else if (o1.getCount() < o2.getCount()) {
+//                    return 1;
+//                } else {
+//                    return 0;
+//                }
+                if (o1.getValue() > o2.getValue()) {
                     return -1;
-                } else if (o1.getCount() < o2.getCount()) {
+                } else if (o1.getValue() < o2.getValue()) {
                     return 1;
                 } else {
                     return 0;
@@ -156,10 +179,10 @@ public class HotPages {
 
             // 遍历列表，取TopN输出
             for (int i=0; i<Math.min(topSize, pageViewCounts.size()); i++) {
-                PageViewCount currentItemViewCount = pageViewCounts.get(i);
+                Map.Entry<String, Long> currentItemViewCount = pageViewCounts.get(i);
                 resultBuilder.append("NO ").append(i+1).append(": ")
-                        .append("页面URL=").append(currentItemViewCount.getUrl())
-                        .append("浏览量=").append(currentItemViewCount.getCount())
+                        .append("页面URL=").append(currentItemViewCount.getKey())
+                        .append("浏览量=").append(currentItemViewCount.getValue())
                         .append("\n");
             }
             resultBuilder.append("=====================\n\n");
@@ -169,7 +192,8 @@ public class HotPages {
 
             out.collect(resultBuilder.toString());
 
-            pageViewCountListState.clear();
+//            pageViewCountListState.clear();
+
         }
     }
 }
