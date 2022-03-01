@@ -115,6 +115,7 @@ public class AppMarketingStatistics {
             String windowEnd = new Timestamp(timeWindow.getEnd()).toString();
             Long count = iterable.iterator().next();
             collector.collect(new ChannelPromotionCount("total", "total", windowEnd, count));
+
         }
     }
 }
